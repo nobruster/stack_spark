@@ -1,0 +1,24 @@
+# Dados persistentes (bind mounts) — nao versionar
+data/
+
+# Checkpoints do Jupyter
+work/.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# Logs de execucao do Spark (gerados pelos workers)
+work/app-*/
+
+# Notebooks temporarios
+work/Untitled*.ipynb
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Env files com secrets
+.env
+
+# OS
+.DS_Store
+Thumbs.db

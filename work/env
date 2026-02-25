@@ -1,0 +1,4 @@
+ACCESS_KEY_ID=minioadmin 
+SECRET_ACCESS_KEY=minioadmin 
+MINIO_ENDPOINT_URL=minio1:9000
+AWS_ENDPOINT_URL=http://minio1:9000

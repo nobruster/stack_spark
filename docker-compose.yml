@@ -1,0 +1,277 @@
+services:
+  spark-master:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    container_name: spark-master
+    environment:
+      - SPARK_MODE=master
+      - SPARK_MASTER_HOST=spark-master
+      - SPARK_MASTER_PORT=7077
+      - SPARK_MASTER_WEBUI_PORT=8080
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: '1.0'
+    ports:
+      - "8090:8080"
+      - "7077:7077"
+    volumes:
+      - ./config/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf
+      - ./config/spark/log4j2.properties:/opt/bitnami/spark/conf/log4j2.properties
+      - ./data/spark-events:/opt/bitnami/spark/logs/events
+      - ./work:/opt/bitnami/spark/work
+    networks:
+      - spark-network
+
+  spark-worker-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    container_name: spark-worker-1
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2g
+      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_WEBUI_PORT=8081
+    deploy:
+      resources:
+        limits:
+          memory: 2.5g
+          cpus: '2.0'
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./config/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf
+      - ./config/spark/log4j2.properties:/opt/bitnami/spark/conf/log4j2.properties
+      - ./data/spark-events:/opt/bitnami/spark/logs/events
+      - ./work:/opt/bitnami/spark/work
+    depends_on:
+      - spark-master
+    networks:
+      - spark-network
+
+  spark-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    container_name: spark-worker-2
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2g
+      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_WEBUI_PORT=8081
+    deploy:
+      resources:
+        limits:
+          memory: 2.5g
+          cpus: '2.0'
+    ports:
+      - "8082:8081"
+    volumes:
+      - ./config/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf
+      - ./config/spark/log4j2.properties:/opt/bitnami/spark/conf/log4j2.properties
+      - ./data/spark-events:/opt/bitnami/spark/logs/events
+      - ./work:/opt/bitnami/spark/work
+    depends_on:
+      - spark-master
+    networks:
+      - spark-network
+
+  spark-worker-3:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    container_name: spark-worker-3
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2g
+      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_WEBUI_PORT=8081
+    deploy:
+      resources:
+        limits:
+          memory: 2.5g
+          cpus: '2.0'
+    ports:
+      - "8083:8081"
+    volumes:
+      - ./config/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf
+      - ./config/spark/log4j2.properties:/opt/bitnami/spark/conf/log4j2.properties
+      - ./data/spark-events:/opt/bitnami/spark/logs/events
+      - ./work:/opt/bitnami/spark/work
+    depends_on:
+      - spark-master
+    networks:
+      - spark-network
+
+  spark-history:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    container_name: spark-history
+    command:
+      - /opt/bitnami/spark/bin/spark-class
+      - org.apache.spark.deploy.history.HistoryServer
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '0.5'
+    ports:
+      - "18080:18080"
+    volumes:
+      - ./config/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf
+      - ./config/spark/log4j2.properties:/opt/bitnami/spark/conf/log4j2.properties
+      - ./data/spark-events:/opt/bitnami/spark/logs/events
+      - ./work:/opt/bitnami/spark/work
+    depends_on:
+      - spark-master
+    networks:
+      - spark-network
+
+  jupyter-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    container_name: jupyter-1
+    user: root
+    command:
+      - /bin/bash
+      - /opt/bitnami/spark/conf/jupyter-entrypoint.sh
+    environment:
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - PYSPARK_PYTHON=python3
+      - PYSPARK_DRIVER_PYTHON=python3
+      - SPARK_DRIVER_HOST=jupyter-1
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN:-spark123}
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: '1.0'
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./config/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf
+      - ./config/spark/log4j2.properties:/opt/bitnami/spark/conf/log4j2.properties
+      - ./config/spark/jupyter-entrypoint.sh:/opt/bitnami/spark/conf/jupyter-entrypoint.sh
+      - ./data/spark-events:/opt/bitnami/spark/logs/events
+      - ./work:/opt/bitnami/spark/work
+    depends_on:
+      - spark-master
+    networks:
+      - spark-network
+
+  jupyter-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    container_name: jupyter-2
+    user: root
+    command:
+      - /bin/bash
+      - /opt/bitnami/spark/conf/jupyter-entrypoint.sh
+    environment:
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - PYSPARK_PYTHON=python3
+      - PYSPARK_DRIVER_PYTHON=python3
+      - SPARK_DRIVER_HOST=jupyter-2
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN:-spark123}
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: '1.0'
+    ports:
+      - "8889:8888"
+    volumes:
+      - ./config/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf
+      - ./config/spark/log4j2.properties:/opt/bitnami/spark/conf/log4j2.properties
+      - ./config/spark/jupyter-entrypoint.sh:/opt/bitnami/spark/conf/jupyter-entrypoint.sh
+      - ./data/spark-events:/opt/bitnami/spark/logs/events
+      - ./work:/opt/bitnami/spark/work
+    depends_on:
+      - spark-master
+    networks:
+      - spark-network
+
+  minio1:
+    image: minio/minio
+    container_name: minio1
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    command: server http://minio{1...4}/data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - ./data/minio1:/data
+    networks:
+      - spark-network
+
+  minio2:
+    image: minio/minio
+    container_name: minio2
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    command: server http://minio{1...4}/data --console-address ":9001"
+    volumes:
+      - ./data/minio2:/data
+    networks:
+      - spark-network
+
+  minio3:
+    image: minio/minio
+    container_name: minio3
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    command: server http://minio{1...4}/data --console-address ":9001"
+    volumes:
+      - ./data/minio3:/data
+    networks:
+      - spark-network
+
+  minio4:
+    image: minio/minio
+    container_name: minio4
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    command: server http://minio{1...4}/data --console-address ":9001"
+    volumes:
+      - ./data/minio4:/data
+    networks:
+      - spark-network
+
+  dremio:
+    image: dremio/dremio-oss
+    container_name: dremio
+    environment:
+      - DREMIO_MAX_HEAP_MEMORY_SIZE_MB=4096
+      - DREMIO_MAX_DIRECT_MEMORY_SIZE_MB=2048
+    deploy:
+      resources:
+        limits:
+          memory: 8g
+    ports:
+      - "9047:9047"
+      - "31010:31010"
+      - "32010:32010"
+      - "45678:45678"
+    volumes:
+      - ./data/dremio:/opt/dremio/data
+      - ./data/dremio-spill:/opt/dremio/spill
+    networks:
+      - spark-network
+
+networks:
+  spark-network:
+    driver: bridge

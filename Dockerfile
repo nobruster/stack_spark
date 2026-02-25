@@ -1,0 +1,24 @@
+FROM bitnami/spark:3.5.5
+
+USER root
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends python3 python3-pip curl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /opt/bitnami/spark/logs/events && \
+    chmod 777 /opt/bitnami/spark/logs/events && \
+    chmod 777 /opt/bitnami/spark/logs
+
+COPY requirements.txt /tmp/requirements.txt
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt && \
+    rm /tmp/requirements.txt
+
+COPY config/spark/spark-defaults.conf /opt/bitnami/spark/conf/
+COPY config/spark/log4j2.properties /opt/bitnami/spark/conf/
+COPY config/spark/jars /opt/bitnami/spark/jars
+
+EXPOSE 8080 7077 18080
+
+USER 1001
