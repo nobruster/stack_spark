@@ -1,6 +1,12 @@
 # Dados persistentes (bind mounts) — nao versionar
 data/
 
+# Dados brutos baixados (arquivos grandes)
+work/dados-abertos/
+
+# Arquivos internos do Claude Code
+.claude/
+
 # Checkpoints do Jupyter
 work/.ipynb_checkpoints/
 **/.ipynb_checkpoints/

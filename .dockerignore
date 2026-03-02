@@ -1,0 +1,6 @@
+data/
+portainer/
+.git/
+.claude/
+*.md
+work/*.ipynb
