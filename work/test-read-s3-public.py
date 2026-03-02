@@ -1,29 +1,26 @@
 """
-Teste de leitura de arquivo CSV.ZIP publico do portal de dados abertos do governo.
+Leitura de CSV publico do portal de dados abertos + gravacao no MinIO landing zone.
 Fonte: Beneficios emitidos - PDA 2025-2027
 
-
-docker exec -it spark-master /opt/bitnami/spark/bin/spark-submit \
-  --master spark://spark-master:7077 \
-  --deploy-mode client \
-  /opt/bitnami/spark/work/test-read-s3-public.py
-
-docker exec -it -e HOME=/root spark-master \
+Como executar:
+  docker exec spark-master \
     /opt/bitnami/spark/bin/spark-submit \
     --master spark://spark-master:7077 \
     --deploy-mode client \
     /opt/bitnami/spark/work/test-read-s3-public.py
-
 """
-import urllib.request
-import zipfile
 import io
 import os
 import time
+import urllib.request
+import zipfile
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, count, sum as spark_sum
+from pyspark.sql.functions import col
 
+# ---------------------------------------------------------------------------
+# Configuracoes
+# ---------------------------------------------------------------------------
 URL = (
     "https://armazenamento-dadosabertos.s3.sa-east-1.amazonaws.com/"
     "PDA_2025_2027/Grupos_de_dados/Benef%C3%ADcios+emitidos/"
@@ -31,11 +28,17 @@ URL = (
 )
 
 EXTRACT_DIR = "/opt/bitnami/spark/work/dados-abertos"
+CSV_NAME    = "D.SDA.PDA.003.EMI.202601.csv"
+csv_path    = os.path.join(EXTRACT_DIR, CSV_NAME)
+
+BUCKET     = "landing"
+MINIO_PATH = f"s3a://{BUCKET}/pda/beneficios-emitidos/202601/"
+
 os.makedirs(EXTRACT_DIR, exist_ok=True)
 
-csv_path = os.path.join(EXTRACT_DIR, "D.SDA.PDA.003.EMI.202601.csv")
-
-# --- 1. Download do ZIP (pula se ja existe) ---
+# ---------------------------------------------------------------------------
+# 1. Download do ZIP (pula se CSV ja existe no cache local)
+# ---------------------------------------------------------------------------
 print("=" * 60)
 if os.path.exists(csv_path):
     csv_size_mb = os.path.getsize(csv_path) / (1024 * 1024)
@@ -43,8 +46,7 @@ if os.path.exists(csv_path):
 else:
     print("1. Baixando arquivo ZIP...")
     start = time.time()
-    response = urllib.request.urlopen(URL)
-    zip_bytes = response.read()
+    zip_bytes = urllib.request.urlopen(URL).read()
     size_mb = len(zip_bytes) / (1024 * 1024)
     elapsed = time.time() - start
     print(f"   Download concluido: {size_mb:.1f} MB em {elapsed:.1f}s")
@@ -64,7 +66,9 @@ else:
         print(f"   CSV extraido: {csv_name} ({csv_size_mb:.1f} MB)")
     del zip_bytes
 
-# --- 3. Detectar separador ---
+# ---------------------------------------------------------------------------
+# 2. Detectar separador
+# ---------------------------------------------------------------------------
 print("\n3. Detectando separador do CSV...")
 with open(csv_path, "r", encoding="latin-1") as f:
     header_line = f.readline()
@@ -79,30 +83,44 @@ with open(csv_path, "r", encoding="latin-1") as f:
 
 print(f"   Colunas: {header_line.strip().split(sep)}")
 
-# --- 4. Ler com PySpark (local mode - arquivo no driver) ---
-print("\n4. Criando SparkSession (local mode) e lendo CSV...")
-spark = SparkSession.builder \
-    .appName("Teste-DadosAbertos-Beneficios") \
-    .master("local[*]") \
-    .config("spark.driver.memory", "2g") \
-    .config("spark.sql.shuffle.partitions", "8") \
+# ---------------------------------------------------------------------------
+# 3. SparkSession (usa spark-defaults.conf — S3A/MinIO ja configurado)
+# ---------------------------------------------------------------------------
+print("\n4. Criando SparkSession e lendo CSV...")
+spark = (
+    SparkSession.builder
+    .appName("Teste-DadosAbertos-Beneficios")
     .getOrCreate()
+)
+spark.sparkContext.setLogLevel("WARN")
 
 df = spark.read.csv(
     csv_path,
     header=True,
     inferSchema=True,
     sep=sep,
-    encoding="ISO-8859-1"
+    encoding="ISO-8859-1",
 )
 
-# --- 5. Resultados ---
+# Desambiguar colunas duplicadas ('Especie' aparece 2x no dataset)
+seen, new_cols = {}, []
+for c in df.columns:
+    if c in seen:
+        seen[c] += 1
+        new_cols.append(f"{c}_{seen[c]}")
+    else:
+        seen[c] = 0
+        new_cols.append(c)
+df = df.toDF(*new_cols)
+
+# ---------------------------------------------------------------------------
+# 4. Analise local
+# ---------------------------------------------------------------------------
 print("\n" + "=" * 60)
 print("5. RESULTADOS")
 print("=" * 60)
 
 print(f"\n   Total de colunas: {len(df.columns)}")
-
 print("\n   Schema:")
 df.printSchema()
 
@@ -116,6 +134,41 @@ print(f"   Total de linhas: {row_count:,}")
 print("\n   Amostra de valores unicos por UF:")
 df.groupBy("UF").count().orderBy(col("count").desc()).show(10)
 
-print("\n   Teste concluido com SUCESSO!")
+# ---------------------------------------------------------------------------
+# 5. Criar bucket 'landing' no MinIO (via Hadoop S3A) se nao existir
+# ---------------------------------------------------------------------------
+print(f"\n6. Verificando bucket '{BUCKET}' no MinIO...")
+jvm         = spark.sparkContext._jvm
+hadoop_conf = spark.sparkContext._jsc.hadoopConfiguration()
+uri         = jvm.java.net.URI.create(f"s3a://{BUCKET}")
+fs          = jvm.org.apache.hadoop.fs.FileSystem.get(uri, hadoop_conf)
+bucket_path = jvm.org.apache.hadoop.fs.Path(f"s3a://{BUCKET}/")
+
+if not fs.exists(bucket_path):
+    fs.mkdirs(bucket_path)
+    print(f"   Bucket '{BUCKET}' criado.")
+else:
+    print(f"   Bucket '{BUCKET}' ja existe.")
+
+# ---------------------------------------------------------------------------
+# 6. Gravar no MinIO como Parquet (landing zone — dados raw)
+# ---------------------------------------------------------------------------
+print(f"\n7. Gravando em {MINIO_PATH} ...")
+t0 = time.time()
+df.write.mode("overwrite").parquet(MINIO_PATH)
+print(f"   Gravacao concluida em {time.time() - t0:.1f}s")
+
+# ---------------------------------------------------------------------------
+# 7. Validar lendo de volta do MinIO
+# ---------------------------------------------------------------------------
+print(f"\n8. Validando leitura do MinIO...")
+df_val    = spark.read.parquet(MINIO_PATH)
+val_count = df_val.count()
+print(f"   Linhas confirmadas no MinIO: {val_count:,}")
+print(f"   Destino: {MINIO_PATH}")
+
+print("\n" + "=" * 60)
+print("   CONCLUIDO COM SUCESSO!")
+print("=" * 60)
 
 spark.stop()
