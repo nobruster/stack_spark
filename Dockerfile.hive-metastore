@@ -1,0 +1,29 @@
+FROM apache/hive:3.1.3
+
+USER root
+
+# ── Driver JDBC do PostgreSQL ────────────────────────────────────
+# Necessário para HMS usar Postgres como backend
+ADD https://jdbc.postgresql.org/download/postgresql-42.7.3.jar \
+    /opt/hive/lib/postgresql-42.7.3.jar
+
+# ── S3A filesystem para MinIO ────────────────────────────────────
+# Copiado para /opt/hive/lib/ (sempre no classpath do Hive)
+# Permite que o HMS aceite s3:// como localização de tabelas
+RUN cp /opt/hadoop/share/hadoop/tools/lib/hadoop-aws-3.1.0.jar \
+       /opt/hive/lib/hadoop-aws-3.1.0.jar && \
+    cp /opt/hadoop/share/hadoop/tools/lib/aws-java-sdk-bundle-1.11.271.jar \
+       /opt/hive/lib/aws-java-sdk-bundle-1.11.271.jar && \
+    chmod 644 /opt/hive/lib/hadoop-aws-3.1.0.jar \
+              /opt/hive/lib/aws-java-sdk-bundle-1.11.271.jar \
+              /opt/hive/lib/postgresql-42.7.3.jar
+
+# ── Entrypoint customizado ───────────────────────────────────────
+# Verifica se schema já existe antes de initSchema (evita erro em restart)
+COPY config/hive-metastore/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh && \
+    chown hive:hive /opt/hive/conf/
+
+USER hive
+
+ENTRYPOINT ["/entrypoint.sh"]
