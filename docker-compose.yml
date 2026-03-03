@@ -353,7 +353,6 @@ services:
     volumes:
       - ./config/trino/coordinator:/etc/trino
       - ./config/trino/catalog:/etc/trino/catalog
-      - ./config/trino/core-site.xml:/etc/trino/core-site.xml:ro
       - ./work/init-trino.sql:/etc/trino/init-trino.sql:ro
     depends_on:
       hive-metastore:
@@ -373,7 +372,6 @@ services:
     volumes:
       - ./config/trino/worker:/etc/trino
       - ./config/trino/catalog:/etc/trino/catalog
-      - ./config/trino/core-site.xml:/etc/trino/core-site.xml:ro
     depends_on:
       - trino-coordinator
     restart: on-failure
@@ -391,7 +389,6 @@ services:
     volumes:
       - ./config/trino/worker:/etc/trino
       - ./config/trino/catalog:/etc/trino/catalog
-      - ./config/trino/core-site.xml:/etc/trino/core-site.xml:ro
     depends_on:
       - trino-coordinator
     restart: on-failure
