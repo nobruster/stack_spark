@@ -1,6 +1,7 @@
-# Stack de Dados - Spark + MinIO + Dremio
+# Stack de Dados - Spark + MinIO + Dremio + Trino
 
-Stack completa para processamento e analise de dados com Apache Spark, MinIO (object storage) e Dremio (query engine), tudo rodando em containers Docker.
+Stack completa para processamento e analise de dados com Apache Spark, MinIO (object storage), Dremio e Trino (query engines), Hive Metastore e PostgreSQL, tudo rodando em containers Docker.
+Implementa a arquitetura **Medallion** (Landing → Bronze → Silver → Gold) com Delta Lake.
 
 ---
 
@@ -15,33 +16,51 @@ Stack completa para processamento e analise de dados com Apache Spark, MinIO (ob
                    +--------+---------------+
                             |
                    +--------v----------+
-                    | Spark Master (8090)|
-                    +--------+----------+
-                             |
-              +--------------+--------------+
-              |              |              |
-     +--------v---+  +------v-----+  +-----v------+
-     | Worker 1   |  | Worker 2   |  | Worker 3   |
-     | (8081)     |  | (8082)     |  | (8083)     |
-     +------------+  +------------+  +------------+
-
-     +------------+  +------------+  +------------+  +------------+
+                   | Spark Master (8090)|
+                   +--------+----------+
+                            |
+             +--------------+--------------+
+             |              |              |
+    +--------v---+  +------v-----+  +-----v------+
+    | Worker 1   |  | Worker 2   |  | Worker 3   |
+    | (8081)     |  | (8082)     |  | (8083)     |
+    +------------+  +------------+  +------------+
+             |              |              |
+             +--------------+--------------+
+                            |  Delta Lake (s3a://)
+     +------------+  +------v-----+  +------------+  +------------+
      |  MinIO 1   |  |  MinIO 2   |  |  MinIO 3   |  |  MinIO 4   |
      | (9000/9001)|  |            |  |            |  |            |
      +------------+  +------------+  +------------+  +------------+
-
-     +-------------------+       +-------------------+
-     | Spark History     |       |  Dremio (9047)    |
-     | (18080)           |       |                   |
-     +-------------------+       +-------------------+
+          |                    |
+          |  (metadados)       |  (dados)
+          |          +---------v---------+
+          |          | Hive Metastore    |  (9083)
+          |          | (HMS)             |
+          |          +--------+----------+
+          |                   |
+          |          +--------v----------+
+          |          | PostgreSQL        |  (backend HMS)
+          |          | (metastore db)    |
+          |          +-------------------+
+          |
+     +----v------------------+    +-------------------+
+     | Trino Coordinator     |    |  Dremio (9047)    |
+     | (8086) + 2 Workers    |    |  (query engine)   |
+     +----+------------------+    +-------------------+
+          |
+     +----v------------------+
+     | Spark History (18080) |
+     +-----------------------+
 ```
 
-**Fluxo de dados:**
-1. Arquivos JSON sao carregados no MinIO (bucket `landing`)
-2. Jupyter executa notebooks PySpark que leem do MinIO via protocolo S3A
-3. Spark Master distribui as tarefas entre os 3 Workers
-4. Dados processados sao gravados no MinIO (bucket `processing`) em formato Parquet e Delta Lake
-5. Dremio conecta no MinIO e permite consultas SQL sobre os dados processados
+**Fluxo de dados (arquitetura Medallion):**
+1. `landing-beneficios.py` — download do dado publico, grava Parquet raw em `s3a://landing/`
+2. `bronze-beneficios.py` — normaliza tipos e nomes, grava Delta Lake em `s3a://bronze/`
+3. `silver-beneficios.py` — limpa, enriquece e parseia campos, grava Delta Lake em `s3a://prata/`
+4. `gold-beneficios.py` — agrega KPIs e tabelas analiticas, grava Delta Lake em `s3a://ouro/`
+5. **Trino** consulta as tabelas Delta Lake via Hive Metastore (catalogo `delta`) com SQL ANSI
+6. **Dremio** oferece camada de acesso SQL alternativa com UI de BI integrada
 
 ---
 
@@ -71,6 +90,10 @@ A RAM e distribuida assim:
 - Spark Master: 1 GB
 - Spark History: 512 MB
 - Jupyter 1 + Jupyter 2: 2 x 2 GB = 4 GB
+- Trino Coordinator: 2 GB
+- Trino Worker 1 + Worker 2: 2 x 2.5 GB = 5 GB
+- Hive Metastore: 768 MB
+- PostgreSQL: 256 MB
 
 ### Instalacao do Docker (se ainda nao tem)
 
@@ -102,7 +125,7 @@ docker compose version
 
 ```
 stack-prev/
-├── docker-compose.yml          # Orquestrador de todos os 13 containers
+├── docker-compose.yml          # Orquestrador de todos os 17 containers
 ├── Dockerfile.spark            # Imagem customizada do Spark (base bitnami)
 ├── requirements.txt            # Dependencias Python instaladas na imagem
 ├── README.md                   # Este arquivo
@@ -135,13 +158,17 @@ stack-prev/
 
 ### Descricao de cada arquivo
 
-**docker-compose.yml** — Define 13 containers:
+**docker-compose.yml** — Define 17 containers:
 - `spark-master` — coordena o cluster Spark
 - `spark-worker-1`, `spark-worker-2`, `spark-worker-3` — executam as tarefas
 - `spark-history` — historico de jobs Spark
 - `jupyter-1`, `jupyter-2` — IDEs para notebooks (drivers Spark independentes)
-- `minio1`, `minio2`, `minio3`, `minio4` — cluster de object storage
-- `dremio` — motor SQL para consultas
+- `minio1`, `minio2`, `minio3`, `minio4` — cluster de object storage (erasure coding)
+- `dremio` — motor SQL com UI de BI integrada
+- `postgres-metastore` — banco de dados backend do Hive Metastore
+- `hive-metastore` — catalogo de metadados das tabelas Delta Lake
+- `trino-coordinator` — coordenador do cluster Trino (porta 8086)
+- `trino-worker-1`, `trino-worker-2` — workers do Trino
 
 **Dockerfile.spark** — Imagem customizada baseada em `bitnami/spark:3.5.5`. Instala Python, pip, JARs extras, libs Python (PySpark, Pandas, Delta Lake, etc).
 
@@ -254,6 +281,7 @@ Abra cada URL no navegador para confirmar que esta tudo rodando:
 | MinIO Console | http://localhost:9001 | Tela de login do MinIO |
 | MinIO API (S3) | http://localhost:9000 | Resposta XML (endpoint da API S3) |
 | Dremio | http://localhost:9047 | Tela de setup/login do Dremio |
+| Trino UI | http://localhost:8086 | Dashboard de queries e workers do Trino |
 
 > **Dica:** No Spark Master UI (porta 8090), confirme que os 3 workers aparecem na secao "Workers". Se aparecer "0 workers", aguarde 30 segundos e atualize a pagina — os workers levam alguns segundos para se registrar.
 
@@ -659,6 +687,46 @@ O modo distribuido (`http://minio{1...4}/data`) garante redundancia: mesmo que 1
 | Container Limit | 8 GB |
 | Spill to Disk | Habilitado |
 
+### Trino (Query Engine — camada SQL analitica)
+
+| Detalhe | Valor |
+|---|---|
+| Imagem | `trinodb/trino:435` |
+| Web UI | Porta 8086 |
+| Modo | Coordinator + 2 Workers |
+| Catalogo | `delta` (via Hive Metastore) |
+| Formato suportado | Delta Lake, Parquet, ORC, Avro |
+| Container Coordinator | 2 GB RAM, 1 CPU |
+| Container Worker | 2.5 GB RAM, 2 CPUs cada |
+
+O Trino usa o **Hive Metastore** como catalogo de metadados das tabelas Delta Lake. Quando um pipeline Spark escreve em `s3a://ouro/...`, as tabelas ficam acessiveis no Trino via:
+
+```sql
+-- catalogo delta, schema ouro
+SELECT * FROM delta.ouro.kpis_nacionais;
+SELECT * FROM delta.ouro.fat_uf WHERE _ano_mes = '202601';
+```
+
+Para registrar novas tabelas, edite e execute:
+
+```bash
+docker exec trino-coordinator trino -f /etc/trino/init-trino.sql
+```
+
+Consulte `docs/trino-hive-metastore.md` para o manual completo.
+
+### Hive Metastore + PostgreSQL (catalogo de metadados)
+
+| Detalhe | Valor |
+|---|---|
+| HMS Imagem | `apache/hive:4.0.0` |
+| HMS Porta Thrift | 9083 |
+| Backend DB | PostgreSQL 15 (container `postgres-metastore`) |
+| Banco | `metastore` (usuario/senha: `hive`/`hive`) |
+| Config custom | `config/hive-metastore/` (S3A + permissoes) |
+
+O HMS armazena o schema, localizacao e particoes das tabelas Delta Lake. Sem ele, o Trino nao consegue descobrir as tabelas. O PostgreSQL e o banco relacional que persiste esses metadados.
+
 ---
 
 ## Dependencias Python
@@ -688,12 +756,14 @@ Instaladas automaticamente no build da imagem Spark:
 | 8081 | Spark Worker 1 UI | HTTP |
 | 8082 | Spark Worker 2 UI | HTTP |
 | 8083 | Spark Worker 3 UI | HTTP |
+| 8086 | Trino Web UI | HTTP |
 | 8090 | Spark Master UI | HTTP |
 | 8888 | Jupyter 1 | HTTP |
 | 8889 | Jupyter 2 | HTTP |
 | 9000 | MinIO API (compativel com S3) | HTTP |
 | 9001 | MinIO Console (web UI) | HTTP |
 | 9047 | Dremio Web UI | HTTP |
+| 9083 | Hive Metastore (Thrift) | TCP |
 | 18080 | Spark History Server | HTTP |
 | 31010 | Dremio ODBC/JDBC | TCP |
 | 32010 | Dremio Arrow Flight | gRPC |
@@ -707,15 +777,18 @@ Instaladas automaticamente no build da imagem Spark:
 
 Todos os servicos possuem limites Docker (`deploy.resources.limits`) para evitar que a stack derrube a maquina:
 
-| Servico | Memoria | CPUs | Spark cores.max | Spark executor.memory |
-|---|---|---|---|---|
-| spark-master | 1 GB | 1.0 | — | — |
-| spark-worker-1/2/3 | 2.5 GB cada | 2.0 cada | — | — |
-| spark-history | 512 MB | 0.5 | — | — |
-| jupyter-1 | 2 GB | 1.0 | 2 | 1 GB |
-| jupyter-2 | 2 GB | 1.0 | 2 | 1 GB |
-| minio1-4 | sem limite | sem limite | — | — |
-| dremio | 8 GB | sem limite | — | — |
+| Servico | Memoria | CPUs | Observacao |
+|---|---|---|---|
+| spark-master | 1 GB | 1.0 | — |
+| spark-worker-1/2/3 | 2.5 GB cada | 2.0 cada | — |
+| spark-history | 512 MB | 0.5 | — |
+| jupyter-1/2 | 2 GB cada | 1.0 cada | max 2 cores Spark, 1 GB executor |
+| minio1-4 | sem limite | sem limite | erasure coding 4 nodes |
+| dremio | 8 GB | sem limite | 4 GB heap + 2 GB direct |
+| postgres-metastore | 256 MB | 0.5 | backend HMS |
+| hive-metastore | 768 MB | 1.0 | catalogo de metadados |
+| trino-coordinator | 2 GB | 1.0 | Web UI :8086 |
+| trino-worker-1/2 | 2.5 GB cada | 2.0 cada | — |
 
 **Como funciona a protecao:**
 
@@ -906,9 +979,12 @@ spark.sparkContext.setLogLevel("ERROR")
 
 1. **Criar pastas de dados:** `mkdir -p data/minio{1..4} data/dremio data/dremio-spill data/spark-events && chmod -R 777 data/dremio data/dremio-spill`
 2. **Subir a stack:** `docker compose up -d --build`
-3. **Esperar todos Up:** `docker compose ps`
-4. **Criar buckets no MinIO:** `landing` e `processing` via http://localhost:9001 (login: `minioadmin`/`minioadmin`)
-5. **Upload de dados:** Subir arquivos JSON para o bucket `landing`
-6. **Processar no Jupyter:** Abrir http://localhost:8888/?token=spark123 (ou :8889 para o segundo), criar SparkSession, ler JSON, gravar Parquet/Delta
-7. **Consultar no Dremio:** Abrir http://localhost:9047, conectar ao MinIO, promover pastas, consultar SQL
-8. **Parar a stack:** `docker compose down` (dados preservados na pasta `data/`)
+3. **Esperar todos Up:** `docker compose ps` (aguardar `hive-metastore` ficar healthy — pode levar 2-3 min)
+4. **Landing:** `docker exec spark-master spark-submit ... /opt/bitnami/spark/work/landing-beneficios.py`
+5. **Bronze:** `docker exec spark-master spark-submit ... /opt/bitnami/spark/work/bronze-beneficios.py`
+6. **Silver:** `docker exec spark-master spark-submit ... /opt/bitnami/spark/work/silver-beneficios.py`
+7. **Gold:** `docker exec spark-master spark-submit ... /opt/bitnami/spark/work/gold-beneficios.py`
+8. **Registrar tabelas no Trino:** `docker exec trino-coordinator trino -f /etc/trino/init-trino.sql`
+9. **Consultar no Trino:** Abrir http://localhost:8086 ou `docker exec -it trino-coordinator trino`
+10. **Consultar no Dremio:** Abrir http://localhost:9047, conectar ao MinIO, promover pastas, consultar SQL
+11. **Parar a stack:** `docker compose down` (dados preservados na pasta `data/`)
