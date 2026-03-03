@@ -74,9 +74,25 @@ print("\n4. Iniciando SparkSession...")
 spark = (
     SparkSession.builder
     .appName("Landing-PDA-Beneficios-202601")
+    .config("spark.sql.files.maxPartitionBytes", "128MB")  # default oficial Spark
+    .config("spark.sql.adaptive.enabled", "true")          # AQE: coalescência automática
+    .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
     .getOrCreate()
 )
 spark.sparkContext.setLogLevel("WARN")
+
+# Calcula partições em tempo de execução com base nos cores reais do cluster.
+# defaultParallelism = total de cores alocados para esta aplicação (reflete spark.cores.max
+# ou o que o cluster conseguiu alocar de fato no momento do submit).
+total_cores     = spark.sparkContext.defaultParallelism
+shuffle_parts   = max(4, total_cores * 2)   # mínimo 4 mesmo em clusters muito pequenos
+n_output_files  = max(1, total_cores)        # 1 arquivo por core → paralelismo máximo na escrita
+
+spark.conf.set("spark.sql.shuffle.partitions", shuffle_parts)
+
+print(f"   Cores alocados      : {total_cores}")
+print(f"   shuffle.partitions  : {shuffle_parts}  (cores × 2)")
+print(f"   Arquivos de saída   : {n_output_files} (coalesce = 1 por core)")
 
 # ---------------------------------------------------------------------------
 # 4. Criar bucket 'landing' no MinIO (via Hadoop FileSystem S3A)
@@ -124,7 +140,7 @@ print(f"   Colunas ({len(df.columns)}): {df.columns}")
 # ---------------------------------------------------------------------------
 print(f"\n7. Gravando em {MINIO_PATH} ...")
 t0 = time.time()
-df.write.mode("overwrite").parquet(MINIO_PATH)
+df.coalesce(n_output_files).write.mode("overwrite").parquet(MINIO_PATH)
 print(f"   Gravação concluída em {time.time()-t0:.1f}s")
 
 # ---------------------------------------------------------------------------

@@ -167,6 +167,7 @@ t_write = time.time()
     .format("delta")
     .mode("overwrite")
     .option("replaceWhere", f"_ano_mes = '{ANO_MES}'")   # idempotência por mês
+    .option("overwriteSchema", "true")                    # aceita mudança de schema
     .partitionBy("_ano_mes")                              # otimiza consultas mensais
     .save(BRONZE_PATH)
 )

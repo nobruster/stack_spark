@@ -93,13 +93,34 @@ spark = (
             "io.delta.sql.DeltaSparkSessionExtension")
     .config("spark.sql.catalog.spark_catalog",
             "org.apache.spark.sql.delta.catalog.DeltaCatalog")
-    # Performance: reduz partições de shuffle (default=200)
-    # Com spark.cores.max=2, muitas partições geram overhead de I/O
-    .config("spark.sql.shuffle.partitions", "12")
+    .config("spark.sql.adaptive.enabled", "true")
+    .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
     .getOrCreate()
 )
 spark.sparkContext.setLogLevel("WARN")
-print(f"   Spark {spark.version} | shuffle.partitions=12")
+
+# Cálculo dinâmico em tempo de execução.
+# defaultParallelism = cores efetivamente alocados para esta aplicação.
+#
+# shuffle.partitions e n_output_files têm propósitos distintos:
+#   shuffle.partitions → memória por task nos shuffles intermediários
+#                        Silver tem cache(41.5M linhas) + groupBy + Delta write:
+#                        partições grandes causam OOM nos executors de 1 g.
+#                        Fórmula: cores × 6 (cada task ~500 MB em 41.5 M linhas)
+#
+#   n_output_files     → arquivos Parquet de saída (via coalesce antes do write)
+#                        Independente de shuffle.partitions — só controla o write.
+#                        Fórmula: cores (1 arquivo por core = paralelismo máximo)
+total_cores    = spark.sparkContext.defaultParallelism
+shuffle_parts  = max(12, total_cores * 6)   # memória segura para 1 g executor
+n_output_files = max(1,  total_cores)        # arquivos de saída: 1 por core
+
+spark.conf.set("spark.sql.shuffle.partitions", shuffle_parts)
+
+print(f"   Spark {spark.version}")
+print(f"   Cores alocados      : {total_cores}")
+print(f"   shuffle.partitions  : {shuffle_parts}  (cores × 6, protege memória dos groupBy)")
+print(f"   Arquivos de saída   : {n_output_files} (coalesce antes do write, 1 por core)")
 
 # ─────────────────────────────────────────────────────────────────
 # Verificar bucket 'prata' no MinIO
@@ -267,19 +288,33 @@ df.groupBy("ramo_atividade").count().orderBy("count", ascending=False).show()
 # 6. Gravação Delta Lake — particionado por _ano_mes
 # ─────────────────────────────────────────────────────────────────
 print(f"\n6. Gravando Delta Lake em {SILVER_PATH} ...")
+# coalesce(n_output_files): consolida partições antes do write Delta.
+# Com _ano_mes tendo valor único no batch ('202601'), Delta não precisa
+# redistribuir por chave de partição → coalesce é efetivo sem shuffle extra.
+# Resultado: n_output_files arquivos de ~(total_MB / n_output_files) cada.
 t_write = time.time()
 
 (
-    df.write
+    df.coalesce(n_output_files)
+    .write
     .format("delta")
     .mode("overwrite")
     .option("replaceWhere", f"_ano_mes = '{ANO_MES}'")
-    .option("overwriteSchema", "true")   # permite evolução de schema
+    .option("overwriteSchema", "true")
     .partitionBy("_ano_mes")
     .save(SILVER_PATH)
 )
 elapsed = time.time() - t_write
 print(f"   Gravação concluída em {elapsed:.1f}s")
+
+# VACUUM: remove arquivos físicos de versões anteriores do Delta.
+# Sem vacuum, todo run acumula arquivos obsoletos no S3 (soft-delete no log).
+# RETAIN 0 HOURS: remove imediatamente arquivos não referenciados.
+# Em produção com time-travel, usar RETAIN 168 HOURS (7 dias).
+print("\n   Removendo arquivos obsoletos das versões anteriores (VACUUM)...")
+spark.conf.set("spark.databricks.delta.retentionDurationCheck.enabled", "false")
+spark.sql(f"VACUUM delta.`{SILVER_PATH}` RETAIN 0 HOURS")
+print("   VACUUM concluído.")
 
 # ─────────────────────────────────────────────────────────────────
 # 7. Validação final + métricas de negócio
