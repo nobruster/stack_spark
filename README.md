@@ -1,6 +1,6 @@
-# Stack de Dados - Spark + MinIO + Dremio + Trino
+# Stack de Dados - Spark + MinIO + Dremio + Trino + Superset
 
-Stack completa para processamento e analise de dados com Apache Spark, MinIO (object storage), Dremio e Trino (query engines), Hive Metastore e PostgreSQL, tudo rodando em containers Docker.
+Stack completa para processamento, analise e visualizacao de dados com Apache Spark, MinIO (object storage), Dremio e Trino (query engines), Hive Metastore, PostgreSQL e Apache Superset (BI), tudo rodando em containers Docker.
 Implementa a arquitetura **Medallion** (Landing → Bronze → Silver → Gold) com Delta Lake.
 
 ---
@@ -44,12 +44,12 @@ Implementa a arquitetura **Medallion** (Landing → Bronze → Silver → Gold) 
           |          | (metastore db)    |
           |          +-------------------+
           |
-     +----v------------------+    +-------------------+
-     | Trino Coordinator     |    |  Dremio (9047)    |
-     | (8086) + 2 Workers    |    |  (query engine)   |
-     +----+------------------+    +-------------------+
-          |
-     +----v------------------+
+     +----v------------------+    +-------------------+    +-------------------+
+     | Trino Coordinator     |    |  Dremio (9047)    |    | Superset (8088)   |
+     | (8086) + 2 Workers    |    |  (query engine)   |    |  (BI / dashboards)|
+     +----+------------------+    +-------------------+    +--------+----------+
+          |                                                          |
+     +----v------------------+                               (via sqlalchemy-trino)
      | Spark History (18080) |
      +-----------------------+
 ```
@@ -61,6 +61,7 @@ Implementa a arquitetura **Medallion** (Landing → Bronze → Silver → Gold) 
 4. `gold-beneficios.py` — agrega KPIs e tabelas analiticas, grava Delta Lake em `s3a://ouro/`
 5. **Trino** consulta as tabelas Delta Lake via Hive Metastore (catalogo `delta`) com SQL ANSI
 6. **Dremio** oferece camada de acesso SQL alternativa com UI de BI integrada
+7. **Superset** conecta ao Trino e serve dashboards e visualizacoes sobre a camada `ouro`
 
 ---
 
@@ -94,6 +95,7 @@ A RAM e distribuida assim:
 - Trino Worker 1 + Worker 2: 2 x 2.5 GB = 5 GB
 - Hive Metastore: 768 MB
 - PostgreSQL: 256 MB
+- Superset: 1.5 GB
 
 ### Instalacao do Docker (se ainda nao tem)
 
@@ -158,7 +160,7 @@ stack-prev/
 
 ### Descricao de cada arquivo
 
-**docker-compose.yml** — Define 17 containers:
+**docker-compose.yml** — Define 18 containers:
 - `spark-master` — coordena o cluster Spark
 - `spark-worker-1`, `spark-worker-2`, `spark-worker-3` — executam as tarefas
 - `spark-history` — historico de jobs Spark
@@ -169,6 +171,7 @@ stack-prev/
 - `hive-metastore` — catalogo de metadados das tabelas Delta Lake
 - `trino-coordinator` — coordenador do cluster Trino (porta 8086)
 - `trino-worker-1`, `trino-worker-2` — workers do Trino
+- `superset` — plataforma de BI e dashboards (porta 8088)
 
 **Dockerfile.spark** — Imagem customizada baseada em `bitnami/spark:3.5.5`. Instala Python, pip, JARs extras, libs Python (PySpark, Pandas, Delta Lake, etc).
 
@@ -282,6 +285,7 @@ Abra cada URL no navegador para confirmar que esta tudo rodando:
 | MinIO API (S3) | http://localhost:9000 | Resposta XML (endpoint da API S3) |
 | Dremio | http://localhost:9047 | Tela de setup/login do Dremio |
 | Trino UI | http://localhost:8086 | Dashboard de queries e workers do Trino |
+| Superset | http://localhost:8088 | Login do Superset (admin / admin) |
 
 > **Dica:** No Spark Master UI (porta 8090), confirme que os 3 workers aparecem na secao "Workers". Se aparecer "0 workers", aguarde 30 segundos e atualize a pagina — os workers levam alguns segundos para se registrar.
 
@@ -715,6 +719,48 @@ docker exec trino-coordinator trino -f /etc/trino/init-trino.sql
 
 Consulte `docs/trino-hive-metastore.md` para o manual completo.
 
+### Apache Superset (BI e Dashboards)
+
+| Detalhe | Valor |
+|---|---|
+| Imagem | `apache/superset:4.1.1` (customizada via `Dockerfile.superset`) |
+| Web UI | Porta 8088 |
+| Usuario padrao | `admin` / `admin` |
+| Backend DB | SQLite (`/app/superset_home/superset.db`) |
+| Conexao ao Trino | Via `sqlalchemy-trino` — URI: `trino://admin@trino-coordinator:8080/delta` |
+| Container Limit | 1.5 GB RAM, 0.5 CPU |
+
+O Superset conecta diretamente ao Trino como fonte de dados SQL, permitindo criar dashboards sobre as tabelas da camada `ouro` sem precisar de Python ou Jupyter. O driver `sqlalchemy-trino` e instalado via `Dockerfile.superset`.
+
+#### Configurar conexao no Superset
+
+1. Abra http://localhost:8088 e faca login com `admin` / `admin`
+2. Va em **Settings** > **Database Connections** > **+ Database**
+3. Selecione **Trino**
+4. Preencha o campo **SQLAlchemy URI:**
+   ```
+   trino://admin@trino-coordinator:8080/delta
+   ```
+5. Clique em **Test Connection** — deve aparecer "Connection looks good!"
+6. Clique em **Connect**
+
+Apos conectar, va em **SQL Lab** > **SQL Editor** para consultar as tabelas:
+
+```sql
+-- Listar todas as tabelas disponíveis
+SHOW TABLES IN delta.ouro;
+
+-- Consultar KPIs nacionais
+SELECT * FROM delta.ouro.kpis_nacionais LIMIT 100;
+
+-- Consultar agregado por UF
+SELECT * FROM delta.ouro.fat_uf WHERE _ano_mes = '202601' ORDER BY qtd_beneficiarios DESC;
+```
+
+> **Nota:** O Superset leva ~1-2 minutos para inicializar na primeira vez (migracao do banco + criacao do admin). Se abrir antes de estar pronto, aguarde e atualize a pagina.
+
+---
+
 ### Hive Metastore + PostgreSQL (catalogo de metadados)
 
 | Detalhe | Valor |
@@ -760,6 +806,7 @@ Instaladas automaticamente no build da imagem Spark:
 | 8090 | Spark Master UI | HTTP |
 | 8888 | Jupyter 1 | HTTP |
 | 8889 | Jupyter 2 | HTTP |
+| 8088 | Superset Web UI | HTTP |
 | 9000 | MinIO API (compativel com S3) | HTTP |
 | 9001 | MinIO Console (web UI) | HTTP |
 | 9047 | Dremio Web UI | HTTP |
@@ -789,6 +836,7 @@ Todos os servicos possuem limites Docker (`deploy.resources.limits`) para evitar
 | hive-metastore | 768 MB | 1.0 | catalogo de metadados |
 | trino-coordinator | 2 GB | 1.0 | Web UI :8086 |
 | trino-worker-1/2 | 2.5 GB cada | 2.0 cada | — |
+| superset | 1.5 GB | 0.5 | Web UI :8088, conecta ao Trino |
 
 **Como funciona a protecao:**
 
@@ -987,4 +1035,5 @@ spark.sparkContext.setLogLevel("ERROR")
 8. **Registrar tabelas no Trino:** `docker exec trino-coordinator trino -f /etc/trino/init-trino.sql`
 9. **Consultar no Trino:** Abrir http://localhost:8086 ou `docker exec -it trino-coordinator trino`
 10. **Consultar no Dremio:** Abrir http://localhost:9047, conectar ao MinIO, promover pastas, consultar SQL
-11. **Parar a stack:** `docker compose down` (dados preservados na pasta `data/`)
+11. **Visualizar no Superset:** Abrir http://localhost:8088 (admin/admin), adicionar Database com URI `trino://admin@trino-coordinator:8080/delta`, criar charts e dashboards sobre a camada `ouro`
+12. **Parar a stack:** `docker compose down` (dados preservados na pasta `data/`)
