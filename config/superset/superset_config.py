@@ -9,3 +9,6 @@ TALISMAN_ENABLED = False
 
 # Timeout de query mais generoso para queries Trino em tabelas grandes
 SUPERSET_WEBSERVER_TIMEOUT = 300
+
+# Habilita upload de arquivos CSV/Excel para databases que suportam
+ALLOW_FILE_UPLOAD = True
