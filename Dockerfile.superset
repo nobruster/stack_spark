@@ -1,0 +1,8 @@
+FROM apache/superset:4.1.1
+
+USER root
+
+# Driver Trino para SQLAlchemy — necessário para conectar ao trino-coordinator
+RUN pip install --no-cache-dir sqlalchemy-trino
+
+USER superset
